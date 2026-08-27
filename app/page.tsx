@@ -40,7 +40,7 @@ interface Subscriber {
 
 export default function TiffinTracker() {
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
-  const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "PAUSED" | "EXPIRING">("ALL");
+  const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "PAUSED" | "EXPIRING" | "EXPIRED">("ALL");
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -141,6 +141,8 @@ export default function TiffinTracker() {
     (s) => s.daysRemaining > 0 && s.daysRemaining <= 3
   ).length;
 
+  const expiredCount = subscribers.filter((s) => s.daysRemaining <= 0).length;
+
   const filteredSubscribers = subscribers.filter((sub) => {
     const matchesSearch =
       sub.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -151,6 +153,7 @@ export default function TiffinTracker() {
     if (filter === "ACTIVE") return !sub.isPaused && sub.daysRemaining > 0;
     if (filter === "PAUSED") return sub.isPaused;
     if (filter === "EXPIRING") return sub.daysRemaining > 0 && sub.daysRemaining <= 3;
+    if (filter === "EXPIRED") return sub.daysRemaining <= 0;
     return true;
   });
 
@@ -175,18 +178,22 @@ export default function TiffinTracker() {
       </header>
 
       <main className="max-w-md mx-auto p-4 space-y-4">
-        <div className="grid grid-cols-3 gap-2">
-          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
-            <div className="text-xs font-semibold text-slate-500 uppercase">Lunch Today</div>
-            <div className="text-2xl font-bold text-emerald-700 mt-1">{activeLunches}</div>
+        <div className="grid grid-cols-4 gap-2">
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm text-center">
+            <div className="text-[10px] font-semibold text-slate-500 uppercase">Lunch</div>
+            <div className="text-xl font-bold text-emerald-700 mt-1">{activeLunches}</div>
           </div>
-          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
-            <div className="text-xs font-semibold text-slate-500 uppercase">Dinner Today</div>
-            <div className="text-2xl font-bold text-blue-700 mt-1">{activeDinners}</div>
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm text-center">
+            <div className="text-[10px] font-semibold text-slate-500 uppercase">Dinner</div>
+            <div className="text-xl font-bold text-blue-700 mt-1">{activeDinners}</div>
           </div>
-          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-center">
-            <div className="text-xs font-semibold text-slate-500 uppercase">Expiring &le;3d</div>
-            <div className="text-2xl font-bold text-amber-600 mt-1">{expiringSoonCount}</div>
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm text-center">
+            <div className="text-[10px] font-semibold text-slate-500 uppercase">&le;3 Days</div>
+            <div className="text-xl font-bold text-amber-600 mt-1">{expiringSoonCount}</div>
+          </div>
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm text-center">
+            <div className="text-[10px] font-semibold text-slate-500 uppercase">Expired</div>
+            <div className="text-xl font-bold text-red-600 mt-1">{expiredCount}</div>
           </div>
         </div>
 
@@ -202,7 +209,7 @@ export default function TiffinTracker() {
         </div>
 
         <div className="flex gap-2 overflow-x-auto pb-1 text-xs font-medium">
-          {(["ALL", "ACTIVE", "PAUSED", "EXPIRING"] as const).map((tab) => (
+          {(["ALL", "ACTIVE", "PAUSED", "EXPIRING", "EXPIRED"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setFilter(tab)}
@@ -212,7 +219,9 @@ export default function TiffinTracker() {
                   : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
               }`}
             >
-              {tab === "EXPIRING" ? "Expiring Soon" : tab.charAt(0) + tab.slice(1).toLowerCase()}
+              {tab === "EXPIRING"
+                ? "Expiring Soon"
+                : tab.charAt(0) + tab.slice(1).toLowerCase()}
             </button>
           ))}
         </div>
@@ -229,8 +238,10 @@ export default function TiffinTracker() {
                 className={`bg-white rounded-xl p-4 border shadow-sm transition ${
                   sub.isPaused
                     ? "border-amber-300 bg-amber-50/30 opacity-80"
+                    : sub.daysRemaining <= 0
+                    ? "border-red-300 bg-red-50/20"
                     : sub.daysRemaining <= 3
-                    ? "border-red-300"
+                    ? "border-amber-300"
                     : "border-slate-200"
                 }`}
               >
@@ -255,7 +266,7 @@ export default function TiffinTracker() {
                               : "bg-emerald-100 text-emerald-700"
                           }`}
                         >
-                          {sub.daysRemaining} days left
+                          {sub.daysRemaining <= 0 ? "EXPIRED" : `${sub.daysRemaining} days left`}
                         </span>
                       )}
                     </div>
@@ -303,7 +314,11 @@ export default function TiffinTracker() {
                     <a
                       href={`https://wa.me/${sub.phone.replace(/[^0-9]/g, "")}?text=Hi%20${encodeURIComponent(
                         sub.name
-                      )},%20your%20tiffin%20subscription%20has%20${sub.daysRemaining}%20meals%20remaining.`}
+                      )},%20your%20tiffin%20subscription%20${
+                        sub.daysRemaining <= 0
+                          ? "has%20expired."
+                          : `has%20${sub.daysRemaining}%20meals%20remaining.`
+                      }%20Please%20renew%20to%20continue%20services.`}
                       target="_blank"
                       rel="noreferrer"
                       className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition"
