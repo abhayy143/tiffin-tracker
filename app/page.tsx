@@ -42,7 +42,10 @@ export default function TiffinTracker() {
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "PAUSED" | "EXPIRING">("ALL");
   const [searchTerm, setSearchTerm] = useState("");
-  const [showModal, setShowModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  const [selectedSubForRenew, setSelectedSubForRenew] = useState<Subscriber | null>(null);
+  const [customDays, setCustomDays] = useState<number | "">("");
 
   const [formData, setFormData] = useState({
     name: "",
@@ -98,7 +101,7 @@ export default function TiffinTracker() {
       daysRemaining: 30,
       notes: "",
     });
-    setShowModal(false);
+    setShowAddModal(false);
   };
 
   const togglePause = async (sub: Subscriber) => {
@@ -106,9 +109,12 @@ export default function TiffinTracker() {
     await updateDoc(ref, { isPaused: !sub.isPaused });
   };
 
-  const renewPlan = async (sub: Subscriber, daysToAdd: number) => {
-    const ref = doc(db, "subscribers", sub.id);
-    await updateDoc(ref, { daysRemaining: sub.daysRemaining + daysToAdd });
+  const executeRenew = async (daysToAdd: number) => {
+    if (!selectedSubForRenew || daysToAdd <= 0) return;
+    const ref = doc(db, "subscribers", selectedSubForRenew.id);
+    await updateDoc(ref, { daysRemaining: selectedSubForRenew.daysRemaining + daysToAdd });
+    setSelectedSubForRenew(null);
+    setCustomDays("");
   };
 
   const deductDay = async (sub: Subscriber) => {
@@ -154,10 +160,13 @@ export default function TiffinTracker() {
         <div className="max-w-md mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Utensils className="h-6 w-6" />
-            <h1 className="text-xl font-bold">Golaghat Tiffin</h1>
+            <div>
+              <h1 className="text-xl font-bold leading-tight">Ghoruwa Swaad</h1>
+              <p className="text-[11px] text-emerald-100 font-medium">Golaghat Tiffin Tracker</p>
+            </div>
           </div>
           <button
-            onClick={() => setShowModal(true)}
+            onClick={() => setShowAddModal(true)}
             className="bg-white text-emerald-800 p-2 rounded-full font-semibold shadow hover:bg-slate-100 transition"
           >
             <Plus className="h-5 w-5" />
@@ -334,11 +343,11 @@ export default function TiffinTracker() {
                     </button>
 
                     <button
-                      onClick={() => renewPlan(sub, 30)}
+                      onClick={() => setSelectedSubForRenew(sub)}
                       className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 flex items-center gap-1 transition"
-                      title="Add 30 days"
+                      title="Open Renew Options"
                     >
-                      <RefreshCw className="h-3 w-3" /> +30d
+                      <RefreshCw className="h-3 w-3" /> Renew
                     </button>
                   </div>
                 </div>
@@ -348,13 +357,80 @@ export default function TiffinTracker() {
         </div>
       </main>
 
-      {showModal && (
+      {selectedSubForRenew && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-xs rounded-2xl p-5 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between border-b pb-2">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Renew Plan</h3>
+                <p className="text-xs text-slate-500">{selectedSubForRenew.name}</p>
+              </div>
+              <button
+                onClick={() => setSelectedSubForRenew(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="text-xs text-slate-600">
+              Current balance: <span className="font-bold">{selectedSubForRenew.daysRemaining} days</span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => executeRenew(7)}
+                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold py-2.5 rounded-xl text-xs transition"
+              >
+                +7 Days
+              </button>
+              <button
+                onClick={() => executeRenew(15)}
+                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold py-2.5 rounded-xl text-xs transition"
+              >
+                +15 Days
+              </button>
+              <button
+                onClick={() => executeRenew(30)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition"
+              >
+                +30 Days
+              </button>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100">
+              <label className="block text-[11px] font-semibold text-slate-600 uppercase mb-1">
+                Or Custom Days
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="e.g. 10"
+                  value={customDays}
+                  onChange={(e) => setCustomDays(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm outline-none"
+                />
+                <button
+                  disabled={!customDays || Number(customDays) <= 0}
+                  onClick={() => executeRenew(Number(customDays))}
+                  className="bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white text-xs font-semibold px-4 rounded-lg transition"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAddModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-md rounded-t-2xl sm:rounded-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b pb-3">
               <h3 className="text-lg font-bold text-slate-900">Add New Subscriber</h3>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => setShowAddModal(false)}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="h-5 w-5" />
@@ -369,7 +445,7 @@ export default function TiffinTracker() {
                 <input
                   required
                   type="text"
-                  placeholder="e.g. Abhay"
+                  placeholder="e.g. Rohan Das"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-emerald-600 outline-none"
