@@ -24,6 +24,9 @@ import {
   MessageCircle,
   Search,
   X,
+  Lock,
+  LogOut,
+  ShieldAlert,
 } from "lucide-react";
 
 interface Subscriber {
@@ -38,7 +41,18 @@ interface Subscriber {
   notes?: string;
 }
 
+const MAX_ATTEMPTS = 4;
+const LOCKOUT_DURATION_MS = 2 * 60 * 1000;
+
 export default function TiffinTracker() {
+  const [mounted, setMounted] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [attempts, setAttempts] = useState(0);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+  const [isVerifying, setIsVerifying] = useState(false);
+
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "PAUSED" | "EXPIRING" | "EXPIRED">("ALL");
   const [searchTerm, setSearchTerm] = useState("");
@@ -58,6 +72,105 @@ export default function TiffinTracker() {
   });
 
   useEffect(() => {
+    setMounted(true);
+    const authStatus = localStorage.getItem("tiffin_admin_auth");
+    if (authStatus === "true") {
+      setIsAuthenticated(true);
+    }
+
+    const savedAttempts = parseInt(localStorage.getItem("tiffin_pin_attempts") || "0", 10);
+    const lockoutUntil = parseInt(localStorage.getItem("tiffin_lockout_until") || "0", 10);
+    const now = Date.now();
+
+    if (lockoutUntil > now) {
+      setLockoutRemaining(Math.ceil((lockoutUntil - now) / 1000));
+      setAttempts(savedAttempts);
+    } else {
+      if (lockoutUntil > 0) {
+        localStorage.removeItem("tiffin_lockout_until");
+        localStorage.setItem("tiffin_pin_attempts", "0");
+      }
+      setAttempts(savedAttempts);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (lockoutRemaining <= 0) return;
+
+    const timer = setInterval(() => {
+      setLockoutRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          localStorage.removeItem("tiffin_lockout_until");
+          localStorage.setItem("tiffin_pin_attempts", "0");
+          setAttempts(0);
+          setPinError("");
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [lockoutRemaining]);
+
+  const handlePinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (lockoutRemaining > 0 || isVerifying || !pinInput) return;
+
+    setIsVerifying(true);
+    setPinError("");
+
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: pinInput }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setIsAuthenticated(true);
+        localStorage.setItem("tiffin_admin_auth", "true");
+        localStorage.setItem("tiffin_pin_attempts", "0");
+        localStorage.removeItem("tiffin_lockout_until");
+        setAttempts(0);
+        setPinError("");
+        setPinInput("");
+      } else {
+        const newAttempts = attempts + 1;
+        setAttempts(newAttempts);
+        localStorage.setItem("tiffin_pin_attempts", newAttempts.toString());
+        setPinInput("");
+
+        if (newAttempts >= MAX_ATTEMPTS) {
+          const lockoutTime = Date.now() + LOCKOUT_DURATION_MS;
+          localStorage.setItem("tiffin_lockout_until", lockoutTime.toString());
+          setLockoutRemaining(LOCKOUT_DURATION_MS / 1000);
+          setPinError("Too many incorrect attempts. Locked for 2 minutes.");
+        } else {
+          setPinError(`Incorrect PIN. ${MAX_ATTEMPTS - newAttempts} attempt(s) remaining.`);
+        }
+      }
+    } catch {
+      setPinError("Connection error. Try again.");
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("tiffin_admin_auth");
+    setIsAuthenticated(false);
+    setPinInput("");
+    setPinError("");
+  };
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
     const q = query(collection(db, "subscribers"), orderBy("name", "asc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map((doc) => ({
@@ -67,7 +180,7 @@ export default function TiffinTracker() {
       setSubscribers(docs);
     });
     return () => unsubscribe();
-  }, []);
+  }, [isAuthenticated]);
 
   const handleAddSubscriber = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,6 +242,66 @@ export default function TiffinTracker() {
     }
   };
 
+  if (!mounted) {
+    return <div className="min-h-screen bg-slate-900" />;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-xs rounded-2xl p-6 space-y-5 shadow-2xl text-center">
+          <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center mx-auto">
+            {lockoutRemaining > 0 ? (
+              <ShieldAlert className="h-6 w-6 text-red-600" />
+            ) : (
+              <Lock className="h-6 w-6" />
+            )}
+          </div>
+
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Ghoruwa Swaad</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Enter PIN to access Admin Tracker</p>
+          </div>
+
+          <form onSubmit={handlePinSubmit} className="space-y-4">
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={6}
+              disabled={lockoutRemaining > 0 || isVerifying}
+              placeholder="••••"
+              value={pinInput}
+              onChange={(e) => setPinInput(e.target.value)}
+              className="w-full text-center text-2xl tracking-widest font-bold py-2 border-b-2 border-slate-300 focus:border-emerald-600 outline-none disabled:bg-slate-50 disabled:text-slate-400"
+              autoFocus
+            />
+
+            {lockoutRemaining > 0 ? (
+              <div className="text-xs font-semibold text-red-600 bg-red-50 py-2 rounded-lg">
+                Locked. Try again in {Math.floor(lockoutRemaining / 60)}:
+                {(lockoutRemaining % 60).toString().padStart(2, "0")}
+              </div>
+            ) : (
+              pinError && (
+                <div className="text-xs font-semibold text-red-600">
+                  {pinError}
+                </div>
+              )
+            )}
+
+            <button
+              type="submit"
+              disabled={lockoutRemaining > 0 || !pinInput || isVerifying}
+              className="w-full bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white font-bold py-2.5 rounded-xl text-sm transition"
+            >
+              {isVerifying ? "Verifying..." : "Unlock Dashboard"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   const activeLunches = subscribers.filter(
     (s) => !s.isPaused && s.daysRemaining > 0 && (s.mealSlot === "LUNCH" || s.mealSlot === "BOTH")
   ).length;
@@ -168,12 +341,22 @@ export default function TiffinTracker() {
               <p className="text-[11px] text-emerald-100 font-medium">Golaghat Tiffin Tracker</p>
             </div>
           </div>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="bg-white text-emerald-800 p-2 rounded-full font-semibold shadow hover:bg-slate-100 transition"
-          >
-            <Plus className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="bg-white text-emerald-800 p-2 rounded-full font-semibold shadow hover:bg-slate-100 transition"
+              title="Add Subscriber"
+            >
+              <Plus className="h-5 w-5" />
+            </button>
+            <button
+              onClick={handleLogout}
+              className="bg-emerald-800 text-emerald-100 hover:text-white p-2 rounded-full transition"
+              title="Lock / Logout"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </header>
 
