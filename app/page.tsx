@@ -27,7 +27,14 @@ import {
   Lock,
   LogOut,
   ShieldAlert,
+  Calendar as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  FileText,
 } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 interface Subscriber {
   id: string;
@@ -39,10 +46,17 @@ interface Subscriber {
   daysRemaining: number;
   isPaused: boolean;
   notes?: string;
+  deliveryHistory?: Record<string, "DELIVERED" | "NOT_DELIVERED">;
 }
 
 const MAX_ATTEMPTS = 4;
 const LOCKOUT_DURATION_MS = 2 * 60 * 1000;
+
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
 
 export default function TiffinTracker() {
   const [mounted, setMounted] = useState(false);
@@ -60,6 +74,9 @@ export default function TiffinTracker() {
 
   const [selectedSubForRenew, setSelectedSubForRenew] = useState<Subscriber | null>(null);
   const [customDays, setCustomDays] = useState<number | "">("");
+
+  const [selectedSubForCalendar, setSelectedSubForCalendar] = useState<Subscriber | null>(null);
+  const [calendarDate, setCalendarDate] = useState(new Date());
 
   const [formData, setFormData] = useState({
     name: "",
@@ -178,9 +195,14 @@ export default function TiffinTracker() {
         ...doc.data(),
       })) as Subscriber[];
       setSubscribers(docs);
+
+      if (selectedSubForCalendar) {
+        const updated = docs.find((d) => d.id === selectedSubForCalendar.id);
+        if (updated) setSelectedSubForCalendar(updated);
+      }
     });
     return () => unsubscribe();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, selectedSubForCalendar?.id]);
 
   const handleAddSubscriber = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -203,6 +225,7 @@ export default function TiffinTracker() {
       daysRemaining: Number(formData.daysRemaining) || 0,
       notes: formData.notes.trim(),
       isPaused: false,
+      deliveryHistory: {},
     });
 
     setFormData({
@@ -232,14 +255,104 @@ export default function TiffinTracker() {
 
   const deductDay = async (sub: Subscriber) => {
     if (sub.daysRemaining <= 0) return;
+    const todayStr = new Date().toISOString().split("T")[0];
+    const currentHistory = sub.deliveryHistory || {};
+
     const ref = doc(db, "subscribers", sub.id);
-    await updateDoc(ref, { daysRemaining: sub.daysRemaining - 1 });
+    await updateDoc(ref, {
+      daysRemaining: sub.daysRemaining - 1,
+      deliveryHistory: {
+        ...currentHistory,
+        [todayStr]: "DELIVERED",
+      },
+    });
   };
 
   const deleteSubscriber = async (id: string) => {
     if (confirm("Are you sure you want to remove this subscriber?")) {
       await deleteDoc(doc(db, "subscribers", id));
     }
+  };
+
+  const toggleDeliveryDate = async (dateKey: string) => {
+    if (!selectedSubForCalendar) return;
+
+    const currentHistory = { ...(selectedSubForCalendar.deliveryHistory || {}) };
+    const currentStatus = currentHistory[dateKey];
+    let newStatus: "DELIVERED" | "NOT_DELIVERED" | undefined;
+
+    if (!currentStatus) {
+      newStatus = "DELIVERED";
+    } else if (currentStatus === "DELIVERED") {
+      newStatus = "NOT_DELIVERED";
+    } else {
+      newStatus = undefined;
+    }
+
+    if (newStatus) {
+      currentHistory[dateKey] = newStatus;
+    } else {
+      delete currentHistory[dateKey];
+    }
+
+    const ref = doc(db, "subscribers", selectedSubForCalendar.id);
+    await updateDoc(ref, { deliveryHistory: currentHistory });
+  };
+
+  const exportToPDF = () => {
+    if (subscribers.length === 0) {
+      alert("No subscribers to export.");
+      return;
+    }
+
+    const doc = new jsPDF();
+    const dateStr = new Date().toISOString().split("T")[0];
+
+    doc.setFontSize(16);
+    doc.setTextColor(4, 120, 87);
+    doc.text("Ghoruwa Swaad - Subscriber Report", 14, 15);
+
+    doc.setFontSize(9);
+    doc.setTextColor(100);
+    doc.text(`Generated on: ${dateStr} | Total Subscribers: ${subscribers.length}`, 14, 22);
+
+    const tableColumn = ["Name", "Phone", "Address", "Slot", "Days Left", "Status", "Notes"];
+    const tableRows = subscribers.map((sub) => {
+      let statusText = "Active";
+      if (sub.isPaused) statusText = "Paused";
+      else if (sub.daysRemaining <= 0) statusText = "Expired";
+      else if (sub.daysRemaining <= 3) statusText = "Expiring Soon";
+
+      return [
+        sub.name,
+        `'${sub.phone}`,
+        sub.address,
+        sub.mealSlot,
+        sub.daysRemaining.toString(),
+        statusText,
+        sub.notes || "-"
+      ];
+    });
+
+    autoTable(doc, {
+      head: [tableColumn],
+      body: tableRows,
+      startY: 26,
+      theme: "grid",
+      headStyles: { fillColor: [4, 120, 87], textColor: 255, fontStyle: "bold" },
+      styles: { fontSize: 8, cellPadding: 2 },
+      columnStyles: {
+        0: { cellWidth: 28 },
+        1: { cellWidth: 26 },
+        2: { cellWidth: 38 },
+        3: { cellWidth: 16 },
+        4: { cellWidth: 16 },
+        5: { cellWidth: 22 },
+        6: { cellWidth: "auto" },
+      },
+    });
+
+    doc.save(`ghoruwa_swaad_subscribers_${dateStr}.pdf`);
   };
 
   if (!mounted) {
@@ -330,6 +443,19 @@ export default function TiffinTracker() {
     return true;
   });
 
+  const getDaysInMonth = (year: number, month: number) => {
+    return new Date(year, month + 1, 0).getDate();
+  };
+
+  const getFirstDayOfMonth = (year: number, month: number) => {
+    return new Date(year, month, 1).getDay();
+  };
+
+  const currentYear = calendarDate.getFullYear();
+  const currentMonth = calendarDate.getMonth();
+  const daysInMonth = getDaysInMonth(currentYear, currentMonth);
+  const firstDay = getFirstDayOfMonth(currentYear, currentMonth);
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-24">
       <header className="bg-emerald-700 text-white p-4 sticky top-0 z-10 shadow-md">
@@ -342,6 +468,13 @@ export default function TiffinTracker() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={exportToPDF}
+              className="bg-emerald-800 text-emerald-100 hover:text-white p-2 rounded-full transition"
+              title="Download PDF Report"
+            >
+              <FileText className="h-4 w-4" />
+            </button>
             <button
               onClick={() => setShowAddModal(true)}
               className="bg-white text-emerald-800 p-2 rounded-full font-semibold shadow hover:bg-slate-100 transition"
@@ -455,12 +588,25 @@ export default function TiffinTracker() {
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => deleteSubscriber(sub.id)}
-                    className="text-slate-300 hover:text-red-600 transition"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setSelectedSubForCalendar(sub);
+                        setCalendarDate(new Date());
+                      }}
+                      className="text-slate-500 hover:text-emerald-700 p-1.5 rounded-lg hover:bg-emerald-50 transition"
+                      title="View Delivery Calendar"
+                    >
+                      <CalendarIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteSubscriber(sub.id)}
+                      className="text-slate-300 hover:text-red-600 p-1.5 transition"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-3 space-y-1 text-sm text-slate-600">
@@ -554,6 +700,105 @@ export default function TiffinTracker() {
           )}
         </div>
       </main>
+
+      {selectedSubForCalendar && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl p-5 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Delivery Calendar</h3>
+                <p className="text-xs text-slate-500 font-medium">{selectedSubForCalendar.name}</p>
+              </div>
+              <button
+                onClick={() => setSelectedSubForCalendar(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between px-1">
+              <button
+                onClick={() => setCalendarDate(new Date(currentYear, currentMonth - 1, 1))}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <div className="text-sm font-bold text-slate-800">
+                {MONTHS[currentMonth]} {currentYear}
+              </div>
+              <button
+                onClick={() => setCalendarDate(new Date(currentYear, currentMonth + 1, 1))}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-center gap-4 text-[11px] font-medium text-slate-600 bg-slate-50 py-2 rounded-lg border border-slate-100">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                <span>Delivered</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+                <span>Not Delivered</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-slate-200"></span>
+                <span>No Record</span>
+              </div>
+            </div>
+
+            <div>
+              <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold text-slate-400 mb-1">
+                {DAYS.map((d) => (
+                  <div key={d}>{d}</div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-7 gap-1 text-center">
+                {Array.from({ length: firstDay }).map((_, i) => (
+                  <div key={`empty-${i}`} className="h-9" />
+                ))}
+
+                {Array.from({ length: daysInMonth }).map((_, i) => {
+                  const dayNum = i + 1;
+                  const dateKey = `${currentYear}-${(currentMonth + 1)
+                    .toString()
+                    .padStart(2, "0")}-${dayNum.toString().padStart(2, "0")}`;
+
+                  const status = selectedSubForCalendar.deliveryHistory?.[dateKey];
+
+                  let bgClass = "bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-100";
+                  if (status === "DELIVERED") {
+                    bgClass = "bg-emerald-600 text-white font-bold shadow-sm";
+                  } else if (status === "NOT_DELIVERED") {
+                    bgClass = "bg-red-500 text-white font-bold shadow-sm";
+                  }
+
+                  return (
+                    <button
+                      key={dateKey}
+                      onClick={() => toggleDeliveryDate(dateKey)}
+                      className={`h-9 rounded-lg text-xs flex flex-col items-center justify-center transition active:scale-95 ${bgClass}`}
+                      title={`Tap to cycle status: ${dateKey}`}
+                    >
+                      <span>{dayNum}</span>
+                      {status === "DELIVERED" && <Check className="h-2.5 w-2.5 stroke-[3]" />}
+                      {status === "NOT_DELIVERED" && <X className="h-2.5 w-2.5 stroke-[3]" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <p className="text-[11px] text-center text-slate-400 italic">
+              Tap any date to toggle: Delivered &rarr; Not Delivered &rarr; Clear
+            </p>
+          </div>
+        </div>
+      )}
 
       {selectedSubForRenew && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
